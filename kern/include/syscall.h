@@ -34,6 +34,16 @@
 #include <cdefs.h> /* for __DEAD */
 struct trapframe; /* from <machine/trapframe.h> */
 
+//I need more than 4 arguments
+struct meldargs {
+
+	const_userptr_t filename;
+	int filehandle;
+	void *buf;
+	size_t size;
+
+};
+
 /*
  * The system call dispatcher.
  */
@@ -64,5 +74,19 @@ int sys_open(const_userptr_t filename, int flags, mode_t mode, int *retval);
 int sys_read(int fd, userptr_t buf, size_t size, int *retval);
 
 /* You need to add more for sys_meld, sys_write, and sys_close */
+
+int sys_write(int fd, userptr_t buf, size_t size, int *retval);
+int sys_close(int fd);
+
+int sys_meld(
+		struct meldargs * meldarg1,
+		struct meldargs * meldarg2,
+		struct meldargs * meldarg3);
+
+//void make_uio(struct iovec *iov, struct uio *u, userptr_t buf, size_t size, off_t offset);
+
+//stdlib stuff I need
+int realloc(void *ptr, size_t new_size);
+char * strncpy(char *s1, const char *s2, size_t n);
 
 #endif /* _SYSCALL_H_ */

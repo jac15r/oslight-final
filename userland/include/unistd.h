@@ -127,6 +127,9 @@ int sync(void);
 /* mkdir - see sys/stat.h */
 int rmdir(const char *dirname);
 
+/* My user version of my sys_meld() syscall */
+int meld(int filehandle1, void *buf1, size_t size1, int filehandle2, void *buf2, size_t size2, int filehandle3, void *buf3, size_t size3);
+
 /* Recommended. */
 pid_t getpid(void);
 int ioctl(int filehandle, int code, void *buf);
