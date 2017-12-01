@@ -1,0 +1,982 @@
+diff --git a/kern/arch/mips/syscall/syscall.c b/kern/arch/mips/syscall/syscall.c
+index fa9fcb4..951a6aa 100644
+--- a/kern/arch/mips/syscall/syscall.c
++++ b/kern/arch/mips/syscall/syscall.c
+@@ -132,6 +132,16 @@ syscall(struct trapframe *tf)
+                         tf->tf_a2,
+                         &retval);
+                 break;
++	    case SYS_close:
++		err = sys_close(tf->tf_a0);
++		break;
++	    case SYS_write:
++		err = sys_write(tf->tf_a0,
++			(userptr_t)tf->tf_a1,
++			tf->tf_a2,
++			&retval);
++	    case SYS_meld:
++		err = sys_meld((struct meldargs *)tf->tf_a0, (struct meldargs *)tf->tf_a1, (struct meldargs *)tf->tf_a2);
+ 
+             /* Project 3:
+              * Add more for meld, close, and write . */
+diff --git a/kern/include/kern/syscall.h b/kern/include/kern/syscall.h
+index c9b8b2b..3bfb442 100644
+--- a/kern/include/kern/syscall.h
++++ b/kern/include/kern/syscall.h
+@@ -196,7 +196,7 @@
+ #define SYS_sync         118
+ #define SYS_reboot       119
+ //#define SYS___sysctl   120
+-
++#define SYS_meld 	 121
+ /*CALLEND*/
+ 
+ 
+diff --git a/kern/include/syscall.h b/kern/include/syscall.h
+index dd4a6fd..e83ee87 100644
+--- a/kern/include/syscall.h
++++ b/kern/include/syscall.h
+@@ -34,6 +34,16 @@
+ #include <cdefs.h> /* for __DEAD */
+ struct trapframe; /* from <machine/trapframe.h> */
+ 
++//I need more than 4 arguments
++struct meldargs {
++
++	const_userptr_t filename;
++	int filehandle;
++	void *buf;
++	size_t size;
++
++};
++
+ /*
+  * The system call dispatcher.
+  */
+@@ -65,4 +75,18 @@ int sys_read(int fd, userptr_t buf, size_t size, int *retval);
+ 
+ /* You need to add more for sys_meld, sys_write, and sys_close */
+ 
++int sys_write(int fd, userptr_t buf, size_t size, int *retval);
++int sys_close(int fd);
++
++int sys_meld(
++		struct meldargs * meldarg1,
++		struct meldargs * meldarg2,
++		struct meldargs * meldarg3);
++
++//void make_uio(struct iovec *iov, struct uio *u, userptr_t buf, size_t size, off_t offset);
++
++//stdlib stuff I need
++int realloc(void *ptr, size_t new_size);
++char * strncpy(char *s1, const char *s2, size_t n);
++
+ #endif /* _SYSCALL_H_ */
+diff --git a/kern/syscall/file_syscalls.c b/kern/syscall/file_syscalls.c
+index c5ac413..0a3dac4 100644
+--- a/kern/syscall/file_syscalls.c
++++ b/kern/syscall/file_syscalls.c
+@@ -2,6 +2,7 @@
+  * File-related system call implementations.
+  */
+ 
++//#include <stdlib.h>
+ #include <types.h>
+ #include <kern/errno.h>
+ #include <kern/fcntl.h>
+@@ -25,7 +26,7 @@
+  * filetable_place to do the real work.
+  */
+ int
+-sys_open(const_userptr_t upath, int flags, mode_t mode, int *retval)
++sys_open(const_userptr_t filename, int flags, mode_t mode, int *retval)
+ {
+ 	const int allflags = O_ACCMODE | O_CREAT | O_EXCL | O_TRUNC | O_APPEND | O_NOCTTY;
+ 
+@@ -38,16 +39,73 @@ sys_open(const_userptr_t upath, int flags, mode_t mode, int *retval)
+ 	 *
+ 	 * Check the design document design/filesyscall.txt for the steps
+ 	 */
+-	(void) upath; // suppress compilation warning until code gets written
+-	(void) flags; // suppress compilation warning until code gets written
+-	(void) mode; // suppress compilation warning until code gets written
+-	(void) retval; // suppress compilation warning until code gets written
+-	(void) allflags; // suppress compilation warning until code gets written
+-	(void) kpath; // suppress compilation warning until code gets written
+-	(void) file; // suppress compilation warning until code gets written
++	//(void) upath; // suppress compilation warning until code gets written
++	//(void) flags; // suppress compilation warning until code gets written
++	//(void) mode; // suppress compilation warning until code gets written
++	//(void) retval; // suppress compilation warning until code gets written
++	//(void) allflags; // suppress compilation warning until code gets written
++	//(void) kpath; // suppress compilation warning until code gets written
++	//(void) file; // suppress compilation warning until code gets written
+ 
++	/*result = copyinstr(filename, kpath, __PATH_MAX, NULL);
++	if (result) {
++		kfree(kpath);
++		return result;
++	}
++
++	kfree(kpath);
++	*/
++
++	if(filename == NULL){
++		*retval = EFAULT;
++		return -1;
++	}
++
++	int flagcheck = flags & allflags;
++	if(flagcheck != O_RDONLY && flagcheck != O_WRONLY && flagcheck != O_RDWR){
++		*retval = EINVAL;
++		return -1;
++	}
++
++	//the filename goes into kpath for openfile_open
++	if((kpath = (char *)kmalloc(__PATH_MAX)) == NULL)
++		return ENOMEM;
++
++	result = copyinstr(filename, kpath, __PATH_MAX, NULL);
++	if(result){
++		kfree(kpath);
++		return result;
++	}
++
++	result = openfile_open(kpath,flags, mode, &file);
++	if(result){
++		kfree(kpath);
++		*retval = result;
++		return -1;
++	}
++
++	//int *fd_ret = NULL;
++	filetable_place(curproc->p_filetable, file, &result);
++	kfree(kpath);
+ 	return result;
+ }
++//struct iovec;
++//struct uio;
++//initialize the uio struct for use
++/*void make_uio(struct iovec *iov, struct uio *u, userptr_t buf, size_t size, off_t offset{
++
++	iov->iov_ubase = buf;
++	iov->iov_len = size;
++	u->uio_iov = iov;
++	u->uio_iovcnt = 1;
++	u->uio_offset = offset;
++	u->uio_resid = size;
++
++	u->uio_segflg = UIO_USERSPACE;
++	u->uio_rw = UIO_READ;
++	u->uio_space = curproc->p_addrspace;
++
++}*/
+ 
+ /*
+  * read() - read data from a file
+@@ -56,17 +114,70 @@ int
+ sys_read(int fd, userptr_t buf, size_t size, int *retval)
+ {
+        int result = 0;
++       struct openfile *open;
+ 
+        /* 
+         * Your implementation of system call read starts here.  
+         *
+         * Check the design document design/filesyscall.txt for the steps
+         */
+-       (void) fd; // suppress compilation warning until code gets written
+-       (void) buf; // suppress compilation warning until code gets written
+-       (void) size; // suppress compilation warning until code gets written
+-       (void) retval; // suppress compilation warning until code gets written
++       //(void) fd; // suppress compilation warning until code gets written
++       //(void) buf; // suppress compilation warning until code gets written
++       //(void) size; // suppress compilation warning until code gets written
++       //(void) retval; // suppress compilation warning until code gets written
++
++	result = filetable_get(curproc->p_filetable, fd, &open);
++	if(result)
++		return EINVAL;
++
++	//of_offsetlock or of_reflock?
++	lock_acquire(curproc->p_filetable->ft_openfiles[fd]->of_offsetlock);
++
++	if(open->of_accmode == O_WRONLY){
++		lock_release(curproc->p_filetable->ft_openfiles[fd]->of_offsetlock);
++		return EBADF;
++	}
+ 
++	//use uio here
++	//make_uio(user_iov, user_uio, buf, size, curproc->p_filetable[fd]->of_offset/*, UIO_READ*/);
++
++	struct uio *user_uio = kmalloc(sizeof(*user_uio));
++	struct iovec *user_iov = kmalloc(sizeof(*user_iov));
++	
++	user_iov->iov_ubase = buf;
++	user_iov->iov_len = size;
++	user_uio->uio_iov = user_iov;
++	user_uio->uio_iovcnt = 1;
++	user_uio->uio_offset = curproc->p_filetable->ft_openfiles[fd]->of_offset;
++	user_uio->uio_resid = size;
++
++	user_uio->uio_segflg = UIO_USERSPACE;
++	user_uio->uio_rw = /*rw*/UIO_READ;
++	user_uio->uio_space = curproc->p_addrspace;
++
++	if(buf == NULL || curproc->p_filetable->ft_openfiles[fd]->of_vnode == NULL){
++		lock_release(curproc->p_filetable->ft_openfiles[fd]->of_offsetlock);
++		kfree(user_uio);
++		kfree(user_iov);
++		return EFAULT;
++	}
++
++	result = VOP_READ(curproc->p_filetable->ft_openfiles[fd]->of_vnode, user_uio);
++	if(result){
++		lock_release(curproc->p_filetable->ft_openfiles[fd]->of_offsetlock);
++		kfree(user_uio);
++		kfree(user_iov);
++		return result;
++	}
++
++	*retval = size - user_uio->uio_resid;
++
++	lock_release(curproc->p_filetable->ft_openfiles[fd]->of_offsetlock);
++
++	kfree(user_uio);
++	kfree(user_iov);
++
++	result = 0;
+        return result;
+ }
+ 
+@@ -74,10 +185,541 @@ sys_read(int fd, userptr_t buf, size_t size, int *retval)
+  * write() - write data to a file
+  */
+ 
++int
++sys_write(int fd, userptr_t buf, size_t size, int *retval)
++{
++       int result = 0;
++       struct openfile *open;
++
++	result = filetable_get(curproc->p_filetable, fd, &open);
++	if(result)
++		return result;
++
++	lock_acquire(curproc->p_filetable->ft_openfiles[fd]->of_offsetlock);
++
++	if(open->of_accmode == O_RDONLY){
++		lock_release(curproc->p_filetable->ft_openfiles[fd]->of_offsetlock);
++		return EBADF;
++	}
++
++	struct uio *user_uio = kmalloc(sizeof(*user_uio));
++	struct iovec *user_iov = kmalloc(sizeof(*user_iov));
++	
++	user_iov->iov_ubase = buf;
++	user_iov->iov_len = size;
++	user_uio->uio_iov = user_iov;
++	user_uio->uio_iovcnt = 1;
++	user_uio->uio_offset = curproc->p_filetable->ft_openfiles[fd]->of_offset;
++	user_uio->uio_resid = size;
++
++	user_uio->uio_segflg = UIO_USERSPACE;
++	user_uio->uio_rw = UIO_WRITE;
++	user_uio->uio_space = curproc->p_addrspace;
++
++	if(buf == NULL || curproc->p_filetable->ft_openfiles[fd]->of_vnode == NULL){
++		lock_release(curproc->p_filetable->ft_openfiles[fd]->of_offsetlock);
++		kfree(user_uio);
++		kfree(user_iov);
++		return EFAULT;
++	}
++
++	result = VOP_WRITE(curproc->p_filetable->ft_openfiles[fd]->of_vnode, user_uio);
++	if(result){
++		lock_release(curproc->p_filetable->ft_openfiles[fd]->of_offsetlock);
++		kfree(user_uio);
++		kfree(user_iov);
++		return result;
++	}
++
++	*retval = size - user_uio->uio_resid;
++
++	lock_release(curproc->p_filetable->ft_openfiles[fd]->of_offsetlock);
++
++	kfree(user_uio);
++	kfree(user_iov);
++
++	result = 0;
++       return result;
++}
+ /*
+  * close() - remove from the file table.
+  */
+ 
++int sys_close(int fd){
++
++	int ret = 0;
++	struct openfile *nullfile = NULL;
++	struct openfile *oldfile = NULL;
++
++	if(!filetable_okfd(curproc->p_filetable, fd))
++		return EBADF;
++	//if(curproc->p_filetable[fd] == NULL)
++	//	return EBADF;
++
++	filetable_placeat(curproc->p_filetable, nullfile, fd, &oldfile);
++
++	if(oldfile == NULL)
++		return EBADF;
++
++	return ret;
++
++}
++
+ /* 
+ * meld () - combine the content of two files word by word into a new file
+ */
++
++//since realloc and krealloc don't exist, I wrote a basic equivalent
++int realloc(void *ptr, size_t new_size){
++	void **newptr;
++	newptr = kmalloc(sizeof(new_size));
++
++	if(newptr == NULL){
++		return ENOMEM;
++	}
++	memcpy(newptr, ptr, sizeof(*ptr));
++	kfree(ptr);
++	ptr = newptr;
++	newptr = NULL;
++
++	return 0;
++}
++
++//more stdlib stuff
++char *
++strncpy(char *s1, const char *s2, size_t n)
++{
++	char *s = s1;
++	while (n > 0 && *s2 != '\0') {
++		*s++ = *s2++;
++		--n;
++	}
++	while (n > 0) {
++		*s++ = '\0';
++		--n;
++	}
++	return s1;
++}
++
++/*int sys_meld(const_userptr_t filename1, int filehandle1, void *buf1, size_t size1,
++		const_userptr_t filename2, int filehandle2, void *buf2, size_t size2,
++		const_userptr_t filename3, int filehandle3, void *buf3, size_t size3){
++*/
++int sys_meld(struct meldargs * meldarg1, struct meldargs * meldarg2, struct meldargs * meldarg3){
++	int result = 0;
++	struct openfile *open1;
++	struct openfile *open2;
++	struct openfile *open3;
++
++	char *kpath1;
++	char *kpath2;
++	char *kpath3;
++
++	//Extract arguments
++	const_userptr_t filename1 = meldarg1->filename;
++	const_userptr_t filename2 = meldarg2->filename;
++	const_userptr_t filename3 = meldarg3->filename;
++
++	int filehandle1 = meldarg1->filehandle;
++	int filehandle2 = meldarg2->filehandle;
++	int filehandle3 = meldarg3->filehandle;
++
++	void *buf1 = meldarg1->buf;
++	void *buf2 = meldarg2->buf;
++	void *buf3 = meldarg3->buf;
++
++	size_t size1 = meldarg1->size;
++	size_t size2 = meldarg2->size;
++	size_t size3 = meldarg3->size;
++
++	//copy names
++	if((kpath1 = (char *)kmalloc(__PATH_MAX)) == NULL)
++		return ENOMEM;
++
++	if((kpath2 = (char *)kmalloc(__PATH_MAX)) == NULL)
++		return ENOMEM;
++	
++	if((kpath3 = (char *)kmalloc(__PATH_MAX)) == NULL)
++		return ENOMEM;
++
++	result = copyinstr(filename1, kpath1, __PATH_MAX, NULL);
++	if(result){
++		kfree(kpath1);
++		kfree(kpath2);
++		kfree(kpath3);
++		return result;
++	}
++
++	result = copyinstr(filename2, kpath2, __PATH_MAX, NULL);
++	if(result){
++		kfree(kpath1);
++		kfree(kpath2);
++		kfree(kpath3);
++		return result;
++	}
++
++	result = copyinstr(filename3, kpath3, __PATH_MAX, NULL);
++	if(result){
++		kfree(kpath1);
++		kfree(kpath2);
++		kfree(kpath3);
++		return result;
++	}
++
++	//open files
++	result = openfile_open(kpath1,O_RDONLY, O_RDONLY, &open1);
++	if(result){
++		kfree(kpath1);
++		kfree(kpath2);
++		kfree(kpath3);
++		return result;
++	}
++
++	result = openfile_open(kpath2,O_RDONLY, O_RDONLY, &open2);
++	if(result){
++		kfree(kpath1);
++		kfree(kpath2);
++		kfree(kpath3);
++		return result;
++	}
++
++	result = openfile_open(kpath3,O_WRONLY, O_WRONLY, &open3);
++	if(result){
++		kfree(kpath1);
++		kfree(kpath2);
++		kfree(kpath3);
++		return result;
++	}
++
++	//Check for existence of file 1 and 2
++	/*result = filetable_get(curproc->p_filetable, filehandle1, &open1);
++	if(result){
++		kfree(kpath1);
++		kfree(kpath2);
++		kfree(kpath3);
++		return EINVAL;
++	}
++		result = filetable_get(curproc->p_filetable, filehandle2, &open2);
++	if(result){
++		kfree(kpath1);
++		kfree(kpath2);
++		kfree(kpath3);
++		return EINVAL;
++	}*/
++
++	//Check for the nonexistence of file 3
++	result = filetable_get(curproc->p_filetable, filehandle3, &open3);
++	if(!result){
++		kfree(kpath1);
++		kfree(kpath2);
++		kfree(kpath3);
++		return EINVAL;
++	}
++
++	//place in filetable
++	result = filetable_place(curproc->p_filetable, open1, &result);
++	if(result){
++		kfree(kpath1);
++		kfree(kpath2);
++		kfree(kpath3);
++		return EINVAL;
++	}
++
++	result = filetable_place(curproc->p_filetable, open2, &result);
++	if(result){
++		kfree(kpath1);
++		kfree(kpath2);
++		kfree(kpath3);
++		return EINVAL;
++	}
++
++	result = filetable_place(curproc->p_filetable, open3, &result);
++	if(result){
++		kfree(kpath1);
++		kfree(kpath2);
++		kfree(kpath3);
++		return EINVAL;
++	}
++
++	//lock time
++	lock_acquire(curproc->p_filetable->ft_openfiles[filehandle1]->of_offsetlock);
++	lock_acquire(curproc->p_filetable->ft_openfiles[filehandle2]->of_offsetlock);
++	lock_acquire(curproc->p_filetable->ft_openfiles[filehandle3]->of_offsetlock);
++
++	//check for correct flags
++	/*if(open1->of_accmode == O_WRONLY){
++		lock_release(curproc->p_filetable->ft_openfiles[filehandle1]->of_offsetlock);
++		lock_release(curproc->p_filetable->ft_openfiles[filehandle2]->of_offsetlock);
++		lock_release(curproc->p_filetable->ft_openfiles[filehandle3]->of_offsetlock);
++		kfree(kpath1);
++		kfree(kpath2);
++		kfree(kpath3);
++		return EBADF;
++	}*/
++	
++
++	//Create uio and iovec structs to move data over
++	struct uio *user_uio1 = kmalloc(sizeof(*user_uio1));
++	struct iovec *user_iov1 = kmalloc(sizeof(*user_iov1));
++	
++	struct uio *user_uio2 = kmalloc(sizeof(*user_uio2));
++	struct iovec *user_iov2 = kmalloc(sizeof(*user_iov2));
++	
++	struct uio *user_uio3 = kmalloc(sizeof(*user_uio3));
++	struct iovec *user_iov3 = kmalloc(sizeof(*user_iov3));
++
++	user_iov1->iov_ubase = buf1;
++	user_iov1->iov_len = size1;
++	user_uio1->uio_iov = user_iov1;
++	user_uio1->uio_iovcnt = 1;
++	user_uio1->uio_offset = curproc->p_filetable->ft_openfiles[filehandle1]->of_offset;
++	user_uio1->uio_resid = size1;
++	user_uio1->uio_segflg = UIO_USERSPACE;
++	user_uio1->uio_rw = UIO_READ;
++	user_uio1->uio_space = curproc->p_addrspace;
++
++	user_iov2->iov_ubase = buf2;
++	user_iov2->iov_len = size2;
++	user_uio2->uio_iov = user_iov2;
++	user_uio2->uio_iovcnt = 1;
++	user_uio2->uio_offset = curproc->p_filetable->ft_openfiles[filehandle2]->of_offset;
++	user_uio2->uio_resid = size2;
++	user_uio2->uio_segflg = UIO_USERSPACE;
++	user_uio2->uio_rw = UIO_READ;
++	user_uio2->uio_space = curproc->p_addrspace;
++
++	user_iov3->iov_ubase = buf3;
++	user_iov3->iov_len = size1 + size2;
++	user_uio3->uio_iov = user_iov3;
++	user_uio3->uio_iovcnt = 1;
++	user_uio3->uio_offset = curproc->p_filetable->ft_openfiles[filehandle3]->of_offset;
++	user_uio3->uio_resid = size3;
++	user_uio3->uio_segflg = UIO_USERSPACE;
++	user_uio3->uio_rw = UIO_WRITE;
++	user_uio3->uio_space = curproc->p_addrspace;
++
++	//read in
++	result = VOP_READ(curproc->p_filetable->ft_openfiles[filehandle1]->of_vnode, user_uio1);
++	if(result){
++		lock_release(curproc->p_filetable->ft_openfiles[filehandle1]->of_offsetlock);
++		lock_release(curproc->p_filetable->ft_openfiles[filehandle2]->of_offsetlock);
++		lock_release(curproc->p_filetable->ft_openfiles[filehandle3]->of_offsetlock);
++		kfree(kpath1);
++		kfree(kpath2);
++		kfree(kpath3);
++		kfree(user_uio1);
++		kfree(user_uio2);
++		kfree(user_uio3);
++		//kfree(user_iov1);
++		//kfree(user_iov2);
++		//kfree(user_iov3);
++		return result;
++	}
++
++	result = VOP_READ(curproc->p_filetable->ft_openfiles[filehandle2]->of_vnode, user_uio2);
++	if(result){
++		lock_release(curproc->p_filetable->ft_openfiles[filehandle1]->of_offsetlock);
++		lock_release(curproc->p_filetable->ft_openfiles[filehandle2]->of_offsetlock);
++		lock_release(curproc->p_filetable->ft_openfiles[filehandle3]->of_offsetlock);
++		kfree(kpath1);
++		kfree(kpath2);
++		kfree(kpath3);
++		kfree(user_uio1);
++		kfree(user_uio2);
++		kfree(user_uio3);
++		//kfree(user_iov1);
++		//kfree(user_iov2);
++		//kfree(user_iov3);
++		return result;
++	}
++
++	int eithersize = 0;
++	int i = 0;
++	unsigned int markertotal = 0;
++	unsigned int marker1 = 0;
++	unsigned int marker2 = 0;
++
++	//pad
++	if(user_uio1->uio_iov->iov_len % 4 == 1){
++		user_uio1->uio_iov->iov_len += 3;
++		result = realloc(user_uio1->uio_iov->iov_ubase, user_uio1->uio_iov->iov_len + 3);
++		if(result){
++			lock_release(curproc->p_filetable->ft_openfiles[filehandle1]->of_offsetlock);
++			lock_release(curproc->p_filetable->ft_openfiles[filehandle2]->of_offsetlock);
++			lock_release(curproc->p_filetable->ft_openfiles[filehandle3]->of_offsetlock);
++			kfree(kpath1);
++			kfree(kpath2);
++			kfree(kpath3);
++			kfree(user_uio1);
++			kfree(user_uio2);
++			kfree(user_uio3);
++			return ENOMEM;
++		}
++		strncpy((char *)(user_uio1->uio_iov->iov_ubase + user_uio1->uio_iov->iov_len - 3), "   ", 3);
++		realloc(user_uio3->uio_iov->iov_ubase,user_uio3->uio_iov->iov_len + 3);
++		user_uio3->uio_iov->iov_len += 3;
++	}
++
++	if(user_uio1->uio_iov->iov_len % 4 == 2){
++		user_uio1->uio_iov->iov_len += 2;
++		result = realloc(user_uio1->uio_iov->iov_ubase, user_uio1->uio_iov->iov_len + 2);
++		if(result){
++			lock_release(curproc->p_filetable->ft_openfiles[filehandle1]->of_offsetlock);
++			lock_release(curproc->p_filetable->ft_openfiles[filehandle2]->of_offsetlock);
++			lock_release(curproc->p_filetable->ft_openfiles[filehandle3]->of_offsetlock);
++			kfree(kpath1);
++			kfree(kpath2);
++			kfree(kpath3);
++			kfree(user_uio1);
++			kfree(user_uio2);
++			kfree(user_uio3);
++			return ENOMEM;
++		}
++		strncpy((char *)(user_uio1->uio_iov->iov_ubase + user_uio1->uio_iov->iov_len - 2), "   ", 2);
++		realloc(user_uio3->uio_iov->iov_ubase,user_uio3->uio_iov->iov_len + 2);
++		user_uio3->uio_iov->iov_len += 2;
++	}
++
++	if(user_uio1->uio_iov->iov_len % 4 == 3){
++		user_uio1->uio_iov->iov_len += 1;
++		result = realloc(user_uio1->uio_iov->iov_ubase, user_uio1->uio_iov->iov_len + 1);
++		if(result){
++			lock_release(curproc->p_filetable->ft_openfiles[filehandle1]->of_offsetlock);
++			lock_release(curproc->p_filetable->ft_openfiles[filehandle2]->of_offsetlock);
++			lock_release(curproc->p_filetable->ft_openfiles[filehandle3]->of_offsetlock);
++			kfree(kpath1);
++			kfree(kpath2);
++			kfree(kpath3);
++			kfree(user_uio1);
++			kfree(user_uio2);
++			kfree(user_uio3);
++			return ENOMEM;
++		}
++		strncpy((char *)(user_uio1->uio_iov->iov_ubase + user_uio1->uio_iov->iov_len - 1), "   ", 1);
++		realloc(user_uio3->uio_iov->iov_ubase,user_uio3->uio_iov->iov_len + 1);
++		user_uio3->uio_iov->iov_len += 1;
++	}
++
++	if(user_uio2->uio_iov->iov_len % 4 == 1){
++		user_uio2->uio_iov->iov_len += 3;
++		result = realloc(user_uio2->uio_iov->iov_ubase, user_uio2->uio_iov->iov_len + 3);
++		if(result){
++			lock_release(curproc->p_filetable->ft_openfiles[filehandle1]->of_offsetlock);
++			lock_release(curproc->p_filetable->ft_openfiles[filehandle2]->of_offsetlock);
++			lock_release(curproc->p_filetable->ft_openfiles[filehandle3]->of_offsetlock);
++			kfree(kpath1);
++			kfree(kpath2);
++			kfree(kpath3);
++			kfree(user_uio1);
++			kfree(user_uio2);
++			kfree(user_uio3);
++			return ENOMEM;
++		}
++		strncpy((char *)(user_uio2->uio_iov->iov_ubase + user_uio2->uio_iov->iov_len - 3), "   ", 3);
++		realloc(user_uio3->uio_iov->iov_ubase,user_uio3->uio_iov->iov_len + 3);
++		user_uio3->uio_iov->iov_len += 3;
++	}
++
++	if(user_uio2->uio_iov->iov_len % 4 == 2){
++		user_uio2->uio_iov->iov_len += 2;
++		result = realloc(user_uio2->uio_iov->iov_ubase, user_uio2->uio_iov->iov_len + 2);
++		if(result){
++			lock_release(curproc->p_filetable->ft_openfiles[filehandle1]->of_offsetlock);
++			lock_release(curproc->p_filetable->ft_openfiles[filehandle2]->of_offsetlock);
++			lock_release(curproc->p_filetable->ft_openfiles[filehandle3]->of_offsetlock);
++			kfree(kpath1);
++			kfree(kpath2);
++			kfree(kpath3);
++			kfree(user_uio1);
++			kfree(user_uio2);
++			kfree(user_uio3);
++			return ENOMEM;
++		}
++		strncpy((char *)(user_uio2->uio_iov->iov_ubase + user_uio2->uio_iov->iov_len - 2), "   ", 2);
++		realloc(user_uio3->uio_iov->iov_ubase,user_uio3->uio_iov->iov_len + 2);
++		user_uio3->uio_iov->iov_len += 2;
++	}
++
++	if(user_uio2->uio_iov->iov_len % 4 == 3){
++		user_uio2->uio_iov->iov_len += 1;
++		result = realloc(user_uio2->uio_iov->iov_ubase, user_uio2->uio_iov->iov_len + 1);
++		if(result){
++			lock_release(curproc->p_filetable->ft_openfiles[filehandle1]->of_offsetlock);
++			lock_release(curproc->p_filetable->ft_openfiles[filehandle2]->of_offsetlock);
++			lock_release(curproc->p_filetable->ft_openfiles[filehandle3]->of_offsetlock);
++			kfree(kpath1);
++			kfree(kpath2);
++			kfree(kpath3);
++			kfree(user_uio1);
++			kfree(user_uio2);
++			kfree(user_uio3);
++			return ENOMEM;
++		}
++		strncpy((char *)(user_uio2->uio_iov->iov_ubase + user_uio2->uio_iov->iov_len - 1), "   ", 1);
++		realloc(user_uio3->uio_iov->iov_ubase,user_uio3->uio_iov->iov_len + 1);
++		user_uio3->uio_iov->iov_len += 1;
++	}
++
++	//write in
++	while(eithersize == 0){
++
++		strncpy((char *)(user_uio3->uio_iov->iov_ubase+markertotal), (char *)(user_iov1->iov_ubase+marker1), 4);
++		markertotal += 4;
++		marker1 += 4;
++		strncpy((char *)(user_uio3->uio_iov->iov_ubase+markertotal), (char *)(user_iov2->iov_ubase+marker2), 4);
++		markertotal += 4;
++		marker2 += 4;
++		i++;
++
++		if(marker1 == user_uio1->uio_iov->iov_len && marker2 == user_uio2->uio_iov->iov_len)
++			eithersize = 3;
++
++		if(marker1 == user_uio1->uio_iov->iov_len)
++			eithersize = 1;
++	
++		if(marker2 == user_uio2->uio_iov->iov_len)
++			eithersize = 2;
++	}
++
++	//finish writing in
++	if(eithersize == 1 ){
++		strncpy((char *)(user_uio3->uio_iov->iov_ubase+markertotal), (char *)(user_iov2->iov_ubase+marker2), user_uio2->uio_iov->iov_len-marker2);
++	}
++
++	if(eithersize == 2 ){
++		strncpy((char *)(user_uio3->uio_iov->iov_ubase+markertotal), (char *)(user_iov1->iov_ubase+marker1), user_uio1->uio_iov->iov_len-marker1);
++	}
++
++	result = VOP_WRITE(curproc->p_filetable->ft_openfiles[filehandle3]->of_vnode, user_uio3);
++	if(result){
++		lock_release(curproc->p_filetable->ft_openfiles[filehandle1]->of_offsetlock);
++		lock_release(curproc->p_filetable->ft_openfiles[filehandle2]->of_offsetlock);
++		lock_release(curproc->p_filetable->ft_openfiles[filehandle3]->of_offsetlock);
++		kfree(kpath1);
++		kfree(kpath2);
++		kfree(kpath3);
++		kfree(user_uio1);
++		kfree(user_uio2);
++		kfree(user_uio3);
++		return result;
++	}
++
++	sys_close(filehandle1);
++	sys_close(filehandle2);
++	sys_close(filehandle3);
++
++	lock_release(curproc->p_filetable->ft_openfiles[filehandle1]->of_offsetlock);
++	lock_release(curproc->p_filetable->ft_openfiles[filehandle2]->of_offsetlock);
++	lock_release(curproc->p_filetable->ft_openfiles[filehandle3]->of_offsetlock);
++	kfree(kpath1);
++	kfree(kpath2);
++	kfree(kpath3);
++	kfree(user_uio1);
++	kfree(user_uio2);
++	kfree(user_uio3);
++	//kfree(user_iov1);
++	//kfree(user_iov2);
++	//kfree(user_iov3);
++	result = 0;
++	return result;
++}
+diff --git a/userland/include/unistd.h b/userland/include/unistd.h
+index 44f2c6a..f57b394 100644
+--- a/userland/include/unistd.h
++++ b/userland/include/unistd.h
+@@ -127,6 +127,9 @@ int sync(void);
+ /* mkdir - see sys/stat.h */
+ int rmdir(const char *dirname);
+ 
++/* My user version of my sys_meld() syscall */
++int meld(int filehandle1, void *buf1, size_t size1, int filehandle2, void *buf2, size_t size2, int filehandle3, void *buf3, size_t size3);
++
+ /* Recommended. */
+ pid_t getpid(void);
+ int ioctl(int filehandle, int code, void *buf);
+diff --git a/userland/testbin/meld/Makefile b/userland/testbin/meld/Makefile
+new file mode 100644
+index 0000000..240af11
+--- /dev/null
++++ b/userland/testbin/meld/Makefile
+@@ -0,0 +1,11 @@
++# Makefile for filetest
++
++TOP=../../..
++.include "$(TOP)/mk/os161.config.mk"
++
++PROG=meld
++SRCS=meld.c
++BINDIR=/testbin
++
++.include "$(TOP)/mk/os161.prog.mk"
++
+diff --git a/userland/testbin/meld/meld.c b/userland/testbin/meld/meld.c
+new file mode 100644
+index 0000000..baaa625
+--- /dev/null
++++ b/userland/testbin/meld/meld.c
+@@ -0,0 +1,152 @@
++/*
++ * Copyright (c) 2000, 2001, 2002, 2003, 2004, 2005, 2008, 2009
++ *	The President and Fellows of Harvard College.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ * 3. Neither the name of the University nor the names of its contributors
++ *    may be used to endorse or promote products derived from this software
++ *    without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE UNIVERSITY AND CONTRIBUTORS ``AS IS'' AND
++ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++ * ARE DISCLAIMED.  IN NO EVENT SHALL THE UNIVERSITY OR CONTRIBUTORS BE LIABLE
++ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
++ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
++ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
++ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
++ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
++ * SUCH DAMAGE.
++ */
++
++/*
++ * filetest.c
++ *
++ * 	Tests the filesystem by opening, writing to and reading from a
++ * 	user specified file.
++ *
++ * This should run (on SFS) even before the file system assignment is started.
++ * It should also continue to work once said assignment is complete.
++ * It will not run fully on emufs, because emufs does not support remove().
++ */
++
++#include <stdio.h>
++#include <string.h>
++#include <unistd.h>
++#include <err.h>
++
++int
++main(int argc, char *argv[])
++{
++	static char writebuf[40] = "Twiddle dee dee, Twiddle dum dum.......\n";
++	static char writebuf2[40] = "This is going to look bad when melded.\n";
++	static char readbuf[81];
++
++	const char *file;
++	const char *file2;
++	const char *file3;
++	int fd, rv, fd2, rv2, fd3, rv3;
++
++	if (argc == 0) {
++		/*warnx("No arguments - running on \"testfile\"");*/
++		file = "testfile";
++	}
++	else if (argc != 3) {
++		errx(1, "Usage: filetest <filename1> < filename2> <filename3>");
++	}
++	else {
++		file = argv[1];
++		file2 = argv[2];
++		file3 = argv[3];
++	}
++
++	fd = open(file, O_WRONLY|O_CREAT|O_TRUNC, 0664);
++	if (fd<0) {
++		err(1, "%s: open for write", file);
++	}
++
++	rv = write(fd, writebuf, 40);
++	if (rv<0) {
++		err(1, "%s: write", file);
++	}
++
++	rv = close(fd);
++	if (rv<0) {
++		err(1, "%s: close (1st time)", file);
++	}
++
++	fd3 = open(file2, O_WRONLY|O_CREAT|O_TRUNC, 0664);
++	if (fd<0) {
++		err(1, "%s: open for write", file);
++	}
++
++
++	rv = write(fd2, writebuf2, 40);
++	if (rv<0) {
++		err(1, "%s: write", file);
++	}
++
++	rv = close(fd2);
++	if (rv<0) {
++		err(1, "%s: close (1st time)", file);
++	}
++
++	fd = open(file, O_RDONLY);
++	if (fd<0) {
++		err(1, "%s: open for read", file);
++	}
++
++	rv = read(fd, readbuf, 40);
++	if (rv<0) {
++		err(1, "%s: read", file);
++	}
++
++	rv = close(fd);
++	printf("Closing fd=%d retval=%d.\n", fd, rv);
++	if (rv<0) {
++		err(1, "%s: close (2nd time)", file);
++	}
++	/* ensure null termination */
++	readbuf[40] = 0;
++
++	if (strcmp(readbuf, writebuf)) {
++		errx(1, "Buffer data mismatch!");
++	}
++
++	printf("Meld section of the test!\n");
++
++	struct meldargs * meldarg1;
++	struct meldargs * meldarg2;
++	struct meldargs * meldarg3;
++
++	meldarg1->filename = file1;
++	meldarg2->filename = file2;
++	meldarg3->filename = file3;
++
++	meldarg1->filehandle = fd;
++	meldarg2->filehandle = fd2;
++	meldarg3->filehandle = fd3;
++
++	meldarg1->size = 40;
++	meldarg2->size = 40;
++	meldarg3->size = 81;
++
++	rv = meld(meldarg1, meldarg2, meldarg3);
++	if(rv != 0)
++		errx(1, "Meld exited with failure!");
++
++/*	rv = remove(file);
++	if (rv<0) {
++		err(1, "%s: remove", file);
++	} */
++	printf("Passed filetest.\n");
++	return 0;
++}
